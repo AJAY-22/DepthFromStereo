@@ -6,12 +6,12 @@ from utils import *
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Stereo matching depth estimation")
     parser.add_argument("--image1", 
-                        # default='./im0e1.png',
-                        default='./bottle_l.jpg',
+                        default='./im0e1.png',
+                        # default='./bottle_l.jpg',
                         help="Path to the left image")
     parser.add_argument("--image2", 
-                        # default='./im1e1.png',
-                        default='./bottle_r.jpg',
+                        default='./im1e1.png',
+                        # default='./bottle_r.jpg',
                         help="Path to the right image")
     parser.add_argument("--calib", 
                         default='./calib.txt',
@@ -23,13 +23,23 @@ if __name__ == '__main__':
                         default='./disp1.pfm',
                         help="Path to the ground truth disparity file for right image")
     parser.add_argument("--kernel_size", type=int, 
-                        default=55, 
+                        default=25, 
                         help="Kernel size for sliding window search")
-    parser.add_argument("--stride", type=int, 
-                        default=55, 
+    parser.add_argument("--strideX", type=int, 
+                        default=5, 
+                        help="Stride for sliding window search")
+    parser.add_argument("--strideY", type=int,
+                        default=5,
                         help="Stride for sliding window search")
     args = parser.parse_args()
 
+    if args.strideX % 2 == 0:
+        print(f"Warning: strideX is even ({args.strideX}). Incrementing by 1 to make it odd.")
+        args.strideX += 1
+
+    if args.strideY % 2 == 0:
+        print(f"Warning: strideY is even ({args.strideY}). Incrementing by 1 to make it odd.")
+        args.strideY += 1
     # Override file paths from command-line arguments
     left_img_path = args.image1
     right_img_path = args.image2
@@ -57,7 +67,7 @@ if __name__ == '__main__':
     
     print("Computing disparity map...")
 
-    computed_disp = stereo_match(left_img, right_img, kernel_size=args.kernel_size, stride_size=args.stride, max_disp=max_disp)
+    computed_disp = stereo_match_cuda(left_img, right_img, kernel_size=args.kernel_size, stride_x=args.strideX, stride_y=args.strideY, max_disp=max_disp)
 
     # Compute depth from computed disparity: z = (b * f) / disparity
     focal_length = 1733.74
@@ -105,6 +115,8 @@ if __name__ == '__main__':
     # plt.imsave("gt_depth.png", gt_depth_norm, cmap='viridis')
 
     # Simple evaluation: Mean Absolute Error in disparity between computed and ground truth
-    abs_error = np.abs(computed_disp[:,:,0] - gt_disp1)
+    # Exclude infinite ground truth disparity values from error computation
+    mask = ~np.isinf(gt_disp1)
+    abs_error = np.abs(computed_disp[:,:,0][mask] - gt_disp1[mask])
     mean_abs_error = np.mean(abs_error)
     print("Mean Absolute Error in disparity:", mean_abs_error)

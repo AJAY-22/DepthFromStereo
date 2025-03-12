@@ -1,7 +1,11 @@
 import re
+import torch
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 from tqdm import tqdm
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
 
 def read_pfm(file):
     """Read a PFM file and return image data and scale."""
@@ -41,12 +45,42 @@ def read_pfm(file):
 def compute_mse(patch1, patch2):
     return np.mean((patch1 - patch2) ** 2)
 
-def stereo_match(left_img, right_img, kernel_size=5, stride_size=2, max_disp=64):
+
+def stereo_match_cuda(left_img, right_img, kernel_size=5, stride_x=1, stride_y=1, max_disp=64):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
     half_k = kernel_size // 2
     disp_map = np.zeros_like(left_img)
     h, w, _ = left_img.shape
-    for y in tqdm(range(half_k, h - half_k, stride_size)):
-        for x in range(half_k, w - half_k):
+    for y in tqdm(range(half_k, h - half_k, stride_y)):
+        for x in range(half_k, w - half_k, stride_x):
+            best_mse = float('inf')
+            best_disp = 0
+            valid_disp = min(max_disp, x - half_k + 1)
+            left_patch = left_img[y - half_k:y + half_k + 1, x - half_k:x + half_k + 1]
+            candidate_patches = np.stack([
+                right_img[y - half_k:y + half_k + 1, x - half_k - d:x + half_k + 1 - d]
+                for d in range(valid_disp)
+            ], axis=0)
+            left_patch_stack = np.repeat(left_patch[None, ...], valid_disp, axis=0)
+            candidate_patches = torch.tensor(candidate_patches, dtype=float).to(device)
+            left_patch_stack = torch.tensor(left_patch_stack, dtype=float).to(device)
+            mses = torch.mean((candidate_patches - left_patch_stack) ** 2, dim=(1, 2, 3))
+            best_disp = int(torch.argmin(mses).cpu().numpy())
+            # disp_map[y, x] = best_disp
+            # disp_map[y - half_k:y + half_k + 1, x - half_k:x + half_k + 1] = best_disp
+            # disp_map[y - half_k: y + half_k + 1, x] = best_disp
+            # disp_map[y - half_k: y + half_k + 1, x - half_k: x + half_k + 1] = best_disp
+            disp_map[y - stride_y//2: y + stride_y//2 + 1, x - stride_x//2: x + stride_x//2 + 1] = best_disp
+    return disp_map
+
+def stereo_match(left_img, right_img, kernel_size=5, stride_x=1, stride_y=1, max_disp=64):
+    half_k = kernel_size // 2
+    disp_map = np.zeros_like(left_img)
+    h, w, _ = left_img.shape
+    for y in tqdm(range(half_k, h - half_k, stride_y)):
+        for x in range(half_k, w - half_k, stride_x):
             best_mse = float('inf')
             best_disp = 0
             valid_disp = min(max_disp, x - half_k + 1)
@@ -60,8 +94,9 @@ def stereo_match(left_img, right_img, kernel_size=5, stride_size=2, max_disp=64)
             best_disp = int(np.argmin(mses))
             # disp_map[y, x] = best_disp
             # disp_map[y - half_k:y + half_k + 1, x - half_k:x + half_k + 1] = best_disp
-            disp_map[y - half_k: y + half_k + 1, x] = best_disp
+            # disp_map[y - half_k: y + half_k + 1, x] = best_disp
             # disp_map[y - half_k: y + half_k + 1, x - half_k: x + half_k + 1] = best_disp
+            disp_map[y - stride_y//2: y + stride_y//2 + 1, x - stride_x//2: x + stride_x//2 + 1] = best_disp
     return disp_map
 
 def parse_calib(calib_path):
