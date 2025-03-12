@@ -4,7 +4,7 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 from tqdm import tqdm
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 
 def read_pfm(file):
@@ -77,12 +77,12 @@ def stereo_match_cuda(left_img, right_img, kernel_size=5, stride_x=1, stride_y=1
 
 def stereo_match(left_img, right_img, kernel_size=5, stride_x=1, stride_y=1, max_disp=64):
     half_k = kernel_size // 2
-    disp_map = np.zeros_like(left_img)
+    disp_map = np.zeros(left_img.shape[:2])
     h, w, _ = left_img.shape
-    for y in tqdm(range(half_k, h - half_k, stride_y)):
+    # cnt = 50
+    for y in tqdm(range(half_k + 100, h - half_k, stride_y)):
         for x in range(half_k, w - half_k, stride_x):
-            best_mse = float('inf')
-            best_disp = 0
+            best_disp = float('inf')
             valid_disp = min(max_disp, x - half_k + 1)
             left_patch = left_img[y - half_k:y + half_k + 1, x - half_k:x + half_k + 1]
             candidate_patches = np.stack([
@@ -92,11 +92,20 @@ def stereo_match(left_img, right_img, kernel_size=5, stride_x=1, stride_y=1, max
             left_patch_stack = np.repeat(left_patch[None, ...], valid_disp, axis=0)
             mses = np.mean((candidate_patches - left_patch_stack) ** 2, axis=(1, 2, 3))
             best_disp = int(np.argmin(mses))
+            # Sets only single pixel disparity
             # disp_map[y, x] = best_disp
+
+            # Sets disparity for entire patch
             # disp_map[y - half_k:y + half_k + 1, x - half_k:x + half_k + 1] = best_disp
+            
+            # Sets disparity for entire column of a patch
             # disp_map[y - half_k: y + half_k + 1, x] = best_disp
-            # disp_map[y - half_k: y + half_k + 1, x - half_k: x + half_k + 1] = best_disp
+
+            # Sets disparity for stride_x x stride_y patch 
             disp_map[y - stride_y//2: y + stride_y//2 + 1, x - stride_x//2: x + stride_x//2 + 1] = best_disp
+        # cnt -= stride_y
+        # if cnt == 0:
+        #     break  
     return disp_map
 
 def parse_calib(calib_path):

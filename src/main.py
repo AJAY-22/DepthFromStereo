@@ -1,17 +1,18 @@
 import cv2
 import numpy as np
 import argparse
+from metrics import compute_ssim
 
 from utils import *
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Stereo matching depth estimation")
     parser.add_argument("--image1", 
-                        default='./im0e1.png',
-                        # default='./bottle_l.jpg',
+                        # default='./im0e1.png',
+                        default='./scenel.jpg',
                         help="Path to the left image")
     parser.add_argument("--image2", 
-                        default='./im1e1.png',
-                        # default='./bottle_r.jpg',
+                        # default='./im1e1.png',
+                        default='./scener.jpg',
                         help="Path to the right image")
     parser.add_argument("--calib", 
                         default='./calib.txt',
@@ -23,7 +24,7 @@ if __name__ == '__main__':
                         default='./disp1.pfm',
                         help="Path to the ground truth disparity file for right image")
     parser.add_argument("--kernel_size", type=int, 
-                        default=25, 
+                        default=55, 
                         help="Kernel size for sliding window search")
     parser.add_argument("--strideX", type=int, 
                         default=5, 
@@ -31,8 +32,12 @@ if __name__ == '__main__':
     parser.add_argument("--strideY", type=int,
                         default=5,
                         help="Stride for sliding window search")
+    parser.add_argument("--output_dir",
+                        default='./output',
+                        help="Output directory for saving results")
     args = parser.parse_args()
 
+    output_dir = args.output_dir
     if args.strideX % 2 == 0:
         print(f"Warning: strideX is even ({args.strideX}). Incrementing by 1 to make it odd.")
         args.strideX += 1
@@ -59,20 +64,23 @@ if __name__ == '__main__':
 
     # Compute disparity map using sliding window search with MSE
     calib_data = parse_calib(calib_path)
-    focal_length = calib_data['focal_length']
-    baseline = calib_data['baseline']
-    max_disp = calib_data['max_disp']
-
-    print(f"Calibration parameters: focal length={calib_data['focal_length']}, baseline={calib_data['baseline']}, max_disp={calib_data['max_disp']}")
-    
+    # focal_length = 1733.74
+    focal_length = 1
+    # baseline = calib_data['baseline']
+    baseline = 1
+    # max_disp = calib_data['max_disp']
+    max_disp = 128
+    print(20 * '#')
+    print(f"Calibration parameters: focal length={focal_length}, baseline={baseline}, max_disp={max_disp}")
+    print(f'Kernel size: {args.kernel_size}, strideX: {args.strideX}, strideY: {args.strideY}')
+    print(20 * '#')
     print("Computing disparity map...")
 
-    computed_disp = stereo_match_cuda(left_img, right_img, kernel_size=args.kernel_size, stride_x=args.strideX, stride_y=args.strideY, max_disp=max_disp)
-
-    # Compute depth from computed disparity: z = (b * f) / disparity
-    focal_length = 1733.74
+    # computed_disp = stereo_match_cuda(left_img, right_img, kernel_size=args.kernel_size, stride_x=args.strideX, stride_y=args.strideY, max_disp=max_disp)
+    computed_disp = stereo_match(left_img, right_img, kernel_size=args.kernel_size, stride_x=args.strideX, stride_y=args.strideY, max_disp=max_disp)
     epsilon = 1e-6
-    computed_depth = baseline * focal_length / (computed_disp[:, :, 0] + epsilon)
+    # Compute depth from computed disparity: z = (b * f) / disparity
+    computed_depth = baseline * focal_length / (computed_disp + epsilon)
 
 
     # Read ground-truth disparity files (disp0.pfm and disp1.pfm)
@@ -82,6 +90,7 @@ if __name__ == '__main__':
     gt_depth = baseline * focal_length / (gt_disp1 + epsilon)
 
     # Normalize depth maps for display (scale to [0,255])
+    # comp_disp_norm = cv2.normalize(computed_disp, None, 0, 255, cv2.NORM_MINMAX)
     # comp_depth_norm = cv2.normalize(computed_depth, None, 0, 255, cv2.NORM_MINMAX)
     # gt_depth_norm = cv2.normalize(gt_depth, None, 0, 255, cv2.NORM_MINMAX)
     # comp_depth_norm = np.uint8(comp_depth_norm)
@@ -94,29 +103,34 @@ if __name__ == '__main__':
 
     depth_min = baseline * focal_length / tight_max_disp
     depth_max = baseline * focal_length / tight_min_disp
-    plt.figure(figsize=(12, 6))
+    # plt.figure(figsize=(12, 6))
     
-    plt.subplot(1, 2, 1)
-    plt.imshow(computed_depth, cmap='rainbow', vmin=depth_min, vmax=depth_max)
+    # plt.subplot(1, 2, 1)
+    # plt.imshow(computed_depth, cmap='rainbow', vmin=depth_min, vmax=depth_max)
+    # plt.imshow(computed_disp, cmap='rainbow')
+    dmin = np.min(computed_disp)
+    dmax = np.max(computed_disp)
+    plt.imshow(computed_disp, cmap='rainbow', vmax=dmax, vmin=dmin)
+
+    # plt.colorbar()
     plt.title("Computed Depth Map")
     plt.axis("off")
     
-    plt.subplot(1, 2, 2)
-
-    plt.imshow(gt_depth, cmap='rainbow', vmin=depth_min, vmax=depth_max)
-    plt.imshow(gt_depth, cmap='rainbow')
-    plt.title("Ground Truth Depth Map")
-    plt.axis("off")
+    # plt.subplot(1, 2, 2)
+    # plt.imshow(gt_depth, cmap='rainbow', vmin=depth_min, vmax=depth_max)
+    # # plt.colorbar()
+    # plt.title("Ground Truth Depth Map")
+    # plt.axis("off")
     
-    plt.show()
+    # plt.show()
     
-    # Save the depth images using matplotlib's imsave with a colormap
-    # plt.imsave("computed_depth.png", comp_depth, cmap='viridis')
-    # plt.imsave("gt_depth.png", gt_depth_norm, cmap='viridis')
+    # mask = ~np.isinf(gt_disp1)
+    # mse = np.sqrt(np.mean((computed_disp[:,:,0][mask] - gt_disp1[mask]) ** 2))
+    # ssim = compute_ssim(computed_disp[:,:,0][mask], gt_disp1[mask], data_range=tight_max_disp - tight_min_disp)
 
-    # Simple evaluation: Mean Absolute Error in disparity between computed and ground truth
-    # Exclude infinite ground truth disparity values from error computation
-    mask = ~np.isinf(gt_disp1)
-    abs_error = np.abs(computed_disp[:,:,0][mask] - gt_disp1[mask])
-    mean_abs_error = np.mean(abs_error)
-    print("Mean Absolute Error in disparity:", mean_abs_error)
+    os.makedirs(output_dir, exist_ok=True)
+    # plt.savefig(os.path.join(output_dir, f"n_{args.kernel_size}_{args.strideX}_{mse:.2f}_{ssim:.2f}.png"))
+    plt.savefig((os.path.join(output_dir, 'watch.png')))
+    print("Kernel Size:", args.kernel_size)
+    print("Mean Squared Error in disparity:", mse)
+    print("SSIM:", ssim)
